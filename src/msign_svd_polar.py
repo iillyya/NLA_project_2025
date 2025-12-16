@@ -1,7 +1,7 @@
 
 import torch
 @torch.no_grad()
-def msign_svd_ref(G: torch.Tensor) -> torch.Tensor:
+def msign_svd(G: torch.Tensor, steps: int = 6) -> torch.Tensor:
     """
     Q = U V^T (точный полярный фактор) — годится как reference на маленьких матрицах.
     """

@@ -20,23 +20,13 @@ def manifold_muon(
         W = W.T
         G = G.T
 
-    # Helper: call msign with/without steps depending on what the function supports
-    def _msign(X: torch.Tensor) -> torch.Tensor:
-        if msign_steps is None:
-            return msign_fn(X)
-        try:
-            return msign_fn(X, steps=msign_steps)
-        except TypeError:
-            # In case msign_fn does not accept `steps`
-            return msign_fn(X)
-
     # Initialize the dual variable
     Lambda = -0.25 * (W.T @ G + G.T @ W)
 
     # Ascend on the dual problem to find the update direction A
     for step in range(dual_steps):
         # Update the candidate direction A
-        A = _msign(G + 2 * W @ Lambda)
+        A = msign_fn(G + 2 * W @ Lambda, steps=msign_steps)
 
         # Measure deviation of A from the tangent space:
         H = W.T @ A + A.T @ W
@@ -52,7 +42,6 @@ def manifold_muon(
     new_W = W - eta * A
 
     # Retract to the manifold
-    new_W = _msign(new_W)
-
+    new_W = msign_fn(new_W, steps=msign_steps)
     # Restore the shape of the solution and return
     return new_W.T if should_transpose else new_W

@@ -12,22 +12,27 @@ from manifold_muon import manifold_muon
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
-# new msigns (you must have these python files / functions)
 from msign import msign as msign_polarexpress
-from msign_ns5 import msign_ns5
 from msign_jordan import msign_jordan5
 from msign_svd_polar import msign_svd
-# from msign_you import msign_you6   # uncomment when YOU_ABC_LIST is filled
+from msign_ns5 import msign_ns5
+from msign_you import msign_you6
 
 
 transform = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Normalize((0.49139968, 0.48215827, 0.44653124),
-                         (0.24703233, 0.24348505, 0.26158768))
+    transforms.Normalize(
+        (0.49139968, 0.48215827, 0.44653124),
+        (0.24703233, 0.24348505, 0.26158768),
+    )
 ])
 
-train_dataset = torchvision.datasets.CIFAR10(root="./data", train=True, transform=transform, download=True)
-test_dataset = torchvision.datasets.CIFAR10(root="./data", train=False, transform=transform, download=True)
+train_dataset = torchvision.datasets.CIFAR10(
+    root="./data", train=True, transform=transform, download=True
+)
+test_dataset = torchvision.datasets.CIFAR10(
+    root="./data", train=False, transform=transform, download=True
+)
 
 train_loader = DataLoader(dataset=train_dataset, batch_size=1024, shuffle=True)
 test_loader = DataLoader(dataset=test_dataset, batch_size=1024, shuffle=False)
@@ -48,11 +53,9 @@ class MLP(nn.Module):
         return x
 
 
-def train(epochs, initial_lr, update, wd, update_kwargs=None):
-    model = MLP().cuda()
+def train(epochs, initial_lr, update, wd, device, msign_fn=None, msign_steps=5):
+    model = MLP().to(device)
     criterion = nn.CrossEntropyLoss()
-
-    update_kwargs = update_kwargs or {}
 
     if update == AdamW:
         optimizer = AdamW(model.parameters(), lr=initial_lr, weight_decay=wd)
@@ -60,13 +63,18 @@ def train(epochs, initial_lr, update, wd, update_kwargs=None):
         assert update in [manifold_muon, hyperspherical_descent]
         optimizer = None
 
-    steps = epochs * len(train_loader)
+    total_steps = epochs * len(train_loader)
     step = 0
 
     if optimizer is None:
-        # Project the weights to the manifold
         for p in model.parameters():
-            p.data = update(p.data, torch.zeros_like(p.data), eta=0, **update_kwargs)
+            if update == manifold_muon:
+                p.data = update(
+                    p.data, torch.zeros_like(p.data), eta=0,
+                    msign_fn=msign_fn, msign_steps=msign_steps
+                )
+            else:
+                p.data = update(p.data, torch.zeros_like(p.data), eta=0)
 
     epoch_losses = []
     epoch_times = []
@@ -74,21 +82,29 @@ def train(epochs, initial_lr, update, wd, update_kwargs=None):
     for epoch in range(epochs):
         start_time = time.time()
         running_loss = 0.0
+
         for i, (images, labels) in enumerate(train_loader):
-            images = images.cuda()
-            labels = labels.cuda()
+            images = images.to(device)
+            labels = labels.to(device)
 
             outputs = model(images)
             loss = criterion(outputs, labels)
 
             model.zero_grad()
             loss.backward()
-            lr = initial_lr * (1 - step / steps)
+
+            lr = initial_lr * (1 - step / total_steps)
 
             with torch.no_grad():
                 if optimizer is None:
                     for p in model.parameters():
-                        p.data = update(p, p.grad, eta=lr, **update_kwargs)
+                        if update == manifold_muon:
+                            p.data = update(
+                                p, p.grad, eta=lr,
+                                msign_fn=msign_fn, msign_steps=msign_steps
+                            )
+                        else:
+                            p.data = update(p, p.grad, eta=lr)
                 else:
                     for param_group in optimizer.param_groups:
                         param_group["lr"] = lr
@@ -110,7 +126,7 @@ def train(epochs, initial_lr, update, wd, update_kwargs=None):
     return model, epoch_losses, epoch_times
 
 
-def eval(model):
+def eval(model, device):
     model.eval()
     with torch.no_grad():
         accs = []
@@ -118,8 +134,8 @@ def eval(model):
             correct = 0
             total = 0
             for images, labels in dataloader:
-                images = images.cuda()
-                labels = labels.cuda()
+                images = images.to(device)
+                labels = labels.to(device)
                 outputs = model(images)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
@@ -145,33 +161,27 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a model on CIFAR-10.")
     parser.add_argument("--epochs", type=int, default=5, help="Number of epochs to train for.")
     parser.add_argument("--lr", type=float, default=0.1, help="Initial learning rate.")
-    parser.add_argument("--update", type=str, default="manifold_muon",
-                        choices=["manifold_muon", "hyperspherical_descent", "adam"],
-                        help="Update rule to use.")
+    parser.add_argument(
+        "--update", type=str, default="manifold_muon",
+        choices=["manifold_muon", "hyperspherical_descent", "adam"],
+        help="Update rule to use."
+    )
     parser.add_argument("--seed", type=int, default=42, help="Seed for the random number generator.")
     parser.add_argument("--wd", type=float, default=0.0, help="Weight decay for AdamW.")
+    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"])
 
-    # only for manifold_muon
-    parser.add_argument("--msign", type=str, default="polarexpress",
-                        choices=["polarexpress", "ns5", "jordan5", "svd_ref"],  # add "you6" when ready
-                        help="Which msign() to use (only for manifold_muon).")
-    parser.add_argument("--msign_steps", type=int, default=5,
-                        help="Number of iterations inside msign (only for polynomial msigns).")
-
+    parser.add_argument(
+        "--msign", type=str, default="polarexpress",
+        choices=["polarexpress", "ns5", "jordan5", "svd_ref"],
+        help="Which msign to use (only for manifold_muon)."
+    )
+    parser.add_argument(
+        "--msign_steps", type=int, default=5,
+        help="Number of iterations inside msign (only for manifold_muon)."
+    )
     args = parser.parse_args()
 
-    # determinism flags
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-    update_rules = {
-        "manifold_muon": manifold_muon,
-        "hyperspherical_descent": hyperspherical_descent,
-        "adam": AdamW
-    }
-    update = update_rules[args.update]
+    device = torch.device("cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
 
     msign_map = {
         "polarexpress": msign_polarexpress,
@@ -181,29 +191,41 @@ if __name__ == "__main__":
         # "you6": msign_you6,
     }
 
-    update_kwargs = {}
-    if args.update == "manifold_muon":
-        # If your manifold_muon signature supports msign_steps, pass it.
-        # If not, remove msign_steps here and bake steps into the function itself.
-        update_kwargs = {
-            "msign_fn": msign_map[args.msign],
-            "msign_steps": args.msign_steps,
-        }
+    torch.manual_seed(args.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    update_rules = {
+        "manifold_muon": manifold_muon,
+        "hyperspherical_descent": hyperspherical_descent,
+        "adam": AdamW
+    }
+    update = update_rules[args.update]
 
     print(f"Training with: {args.update}")
+    print(
+        f"Epochs: {args.epochs} --- LR: {args.lr}",
+        f"--- WD: {args.wd}" if args.update == "adam" else ""
+    )
     if args.update == "manifold_muon":
         print(f"msign: {args.msign} --- msign_steps: {args.msign_steps}")
-    print(f"Epochs: {args.epochs} --- LR: {args.lr}", f"--- WD: {args.wd}" if args.update == "adam" else "")
+    print(f"device: {device}")
+
+    msign_fn = msign_map[args.msign] if args.update == "manifold_muon" else None
 
     model, epoch_losses, epoch_times = train(
         epochs=args.epochs,
         initial_lr=args.lr,
         update=update,
         wd=args.wd,
-        update_kwargs=update_kwargs
+        device=device,
+        msign_fn=msign_fn,
+        msign_steps=args.msign_steps
     )
 
-    test_acc, train_acc = eval(model)
+    test_acc, train_acc = eval(model, device)
     singular_values, norms = weight_stats(model)
 
     results = {
@@ -214,6 +236,7 @@ if __name__ == "__main__":
         "update": args.update,
         "msign": args.msign if args.update == "manifold_muon" else None,
         "msign_steps": args.msign_steps if args.update == "manifold_muon" else None,
+        "device": str(device),
         "epoch_losses": epoch_losses,
         "epoch_times": epoch_times,
         "test_acc": test_acc,
@@ -222,15 +245,14 @@ if __name__ == "__main__":
         "norms": norms
     }
 
-    filename = (
-        f"update-{args.update}"
-        + (f"-msign-{args.msign}-msignsteps-{args.msign_steps}" if args.update == "manifold_muon" else "")
-        + f"-lr-{args.lr}-wd-{args.wd}-seed-{args.seed}.pkl"
-    )
+    filename = f"update-{args.update}"
+    if args.update == "manifold_muon":
+        filename += f"-msign-{args.msign}-msignsteps-{args.msign_steps}"
+    filename += f"-lr-{args.lr}-wd-{args.wd}-seed-{args.seed}.pkl"
+
     os.makedirs("results", exist_ok=True)
 
-    outpath = os.path.join("results", filename)
-    print(f"Saving results to {outpath}")
-    with open(outpath, "wb") as f:
+    print(f"Saving results to {os.path.join('results', filename)}")
+    with open(os.path.join("results", filename), "wb") as f:
         pickle.dump(results, f)
-    print(f"Results saved to {outpath}")
+    print(f"Results saved to {os.path.join('results', filename)}")

@@ -1,7 +1,7 @@
 import torch
 
 @torch.no_grad()
-def msign_ns5(G: torch.Tensor, steps: int = 10) -> torch.Tensor:
+def msign_ns5(G: torch.Tensor, steps: int = 6) -> torch.Tensor:
     """
     Degree-5 Newton–Schulz:
     X <- (15/8)X - (10/8) S X + (3/8) S^2 X , where S = X X^T

@@ -3,7 +3,7 @@ import torch
 JORDAN_ABC: tuple[float, float, float] = (3.4445, -4.7750, 2.0315)
 
 @torch.no_grad()
-def msign_jordan5(G: torch.Tensor, steps: int = 10) -> torch.Tensor:
+def msign_jordan5(G: torch.Tensor, steps: int = 6) -> torch.Tensor:
     assert G.ndim >= 2
     should_transpose = G.size(-2) > G.size(-1)
 
