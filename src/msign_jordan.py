@@ -1,10 +1,6 @@
 import torch
 
-JORDAN_ABC: tuple[float, float, float] = (
-    3.4445,   # a  (пример формата; НЕ гарантированно точные числа)
-    -4.7750,  # b
-    2.0315,   # c
-)
+JORDAN_ABC: tuple[float, float, float] = (3.4445, -4.7750, 2.0315)
 
 @torch.no_grad()
 def msign_jordan5(G: torch.Tensor, steps: int = 10) -> torch.Tensor:

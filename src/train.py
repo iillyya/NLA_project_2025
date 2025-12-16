@@ -1,5 +1,4 @@
 import argparse
-import math
 import os
 import pickle
 import time
@@ -13,97 +12,13 @@ from manifold_muon import manifold_muon
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
+# new msigns (you must have these python files / functions)
+from msign import msign as msign_polarexpress
+from msign_ns5 import msign_ns5
+from msign_jordan import msign_jordan5
+from msign_svd_polar import msign_svd_ref
+# from msign_you import msign_you6   # uncomment when YOU_ABC_LIST is filled
 
-# ===================== msign variants (nothing else depends on them) =====================
-
-ABC_LIST: list[tuple[float, float, float]] = [
-    (8.28721201814563, -23.595886519098837, 17.300387312530933),
-    (4.107059111542203, -2.9478499167379106, 0.5448431082926601),
-    (3.9486908534822946, -2.908902115962949, 0.5518191394370137),
-    (3.3184196573706015, -2.488488024314874, 0.51004894012372),
-    (2.300652019954817, -1.6689039845747493, 0.4188073119525673),
-    (1.891301407787398, -1.2679958271945868, 0.37680408948524835),
-    (1.8750014808534479, -1.2500016453999487, 0.3750001645474248),
-    (1.875, -1.25, 0.375),
-]
-
-ABC_LIST_STABLE: list[tuple[float, float, float]] = [
-    (a / 1.01, b / 1.01**3, c / 1.01**5) for (a, b, c) in ABC_LIST[:-1]
-] + [ABC_LIST[-1]]
-
-
-@torch.no_grad()
-def msign_polarexpress(G: torch.Tensor, steps: int = 10) -> torch.Tensor:
-    """Polar Express (degree=5)"""
-    assert G.ndim >= 2
-    should_transpose: bool = G.size(-2) > G.size(-1)
-
-    x = G.bfloat16()
-    if should_transpose:
-        x = x.mT
-
-    x /= (x.norm(dim=(-2, -1), keepdim=True) * 1.01 + 1e-7)
-
-    for step in range(steps):
-        a, b, c = ABC_LIST_STABLE[step] if step < len(ABC_LIST_STABLE) else ABC_LIST_STABLE[-1]
-        s = x @ x.mT
-        y = c * s
-        y.diagonal(dim1=-2, dim2=-1).add_(b)
-        y = y @ s
-        y.diagonal(dim1=-2, dim2=-1).add_(a)
-        x = y @ x
-
-    if should_transpose:
-        x = x.mT
-    return torch.nan_to_num(x).float()
-
-
-@torch.no_grad()
-def msign_ns3(G: torch.Tensor, steps: int = 10) -> torch.Tensor:
-    """Newton–Schulz degree-3: X <- 1.5X - 0.5 X X^T X"""
-    assert G.ndim >= 2
-    should_transpose: bool = G.size(-2) > G.size(-1)
-
-    x = G.bfloat16()
-    if should_transpose:
-        x = x.mT
-
-    x /= (x.norm(dim=(-2, -1), keepdim=True) * 1.01 + 1e-7)
-
-    for _ in range(steps):
-        s = x @ x.mT
-        x = (1.5 * x) - (0.5 * (s @ x))
-
-    if should_transpose:
-        x = x.mT
-    return torch.nan_to_num(x).float()
-
-
-@torch.no_grad()
-def msign_ns5(G: torch.Tensor, steps: int = 10) -> torch.Tensor:
-    """Newton–Schulz degree-5: X <- (15/8)X + (-10/8)S X + (3/8)S^2 X"""
-    assert G.ndim >= 2
-    should_transpose: bool = G.size(-2) > G.size(-1)
-
-    x = G.bfloat16()
-    if should_transpose:
-        x = x.mT
-
-    x /= (x.norm(dim=(-2, -1), keepdim=True) * 1.01 + 1e-7)
-
-    a, b, c = (15.0 / 8.0), (-10.0 / 8.0), (3.0 / 8.0)
-
-    for _ in range(steps):
-        s = x @ x.mT
-        s2 = s @ s
-        x = (a * x) + (b * (s @ x)) + (c * (s2 @ x))
-
-    if should_transpose:
-        x = x.mT
-    return torch.nan_to_num(x).float()
-
-
-# ===================== data/model (unchanged) =====================
 
 transform = transforms.Compose([
     transforms.ToTensor(),
@@ -132,8 +47,6 @@ class MLP(nn.Module):
         x = self.fc3(x)
         return x
 
-
-# ===================== training/eval (minimal change: update_kwargs) =====================
 
 def train(epochs, initial_lr, update, wd, update_kwargs=None):
     model = MLP().cuda()
@@ -165,14 +78,13 @@ def train(epochs, initial_lr, update, wd, update_kwargs=None):
             images = images.cuda()
             labels = labels.cuda()
 
-            # Forward pass
             outputs = model(images)
             loss = criterion(outputs, labels)
 
-            # Backward and optimize
             model.zero_grad()
             loss.backward()
             lr = initial_lr * (1 - step / steps)
+
             with torch.no_grad():
                 if optimizer is None:
                     for p in model.parameters():
@@ -181,9 +93,10 @@ def train(epochs, initial_lr, update, wd, update_kwargs=None):
                     for param_group in optimizer.param_groups:
                         param_group["lr"] = lr
                     optimizer.step()
-            step += 1
 
+            step += 1
             running_loss += loss.item()
+
             if (i + 1) % 100 == 0:
                 print(f"Epoch [{epoch+1}/{epochs}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}")
 
@@ -193,6 +106,7 @@ def train(epochs, initial_lr, update, wd, update_kwargs=None):
         epoch_losses.append(epoch_loss)
         epoch_times.append(epoch_time)
         print(f"Epoch {epoch+1}, Loss: {epoch_loss}, Time: {epoch_time:.4f} seconds")
+
     return model, epoch_losses, epoch_times
 
 
@@ -227,8 +141,6 @@ def weight_stats(model):
     return singular_values, norms
 
 
-# ===================== main (minimal change: CLI for msign + update_kwargs) =====================
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a model on CIFAR-10.")
     parser.add_argument("--epochs", type=int, default=5, help="Number of epochs to train for.")
@@ -239,12 +151,12 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Seed for the random number generator.")
     parser.add_argument("--wd", type=float, default=0.0, help="Weight decay for AdamW.")
 
-    # Only used when --update manifold_muon
+    # only for manifold_muon
     parser.add_argument("--msign", type=str, default="polarexpress",
-                        choices=["polarexpress", "ns3", "ns5"],
-                        help="Which msign() implementation to use (only for manifold_muon).")
+                        choices=["polarexpress", "ns5", "jordan5", "svd_ref"],  # add "you6" when ready
+                        help="Which msign() to use (only for manifold_muon).")
     parser.add_argument("--msign_steps", type=int, default=5,
-                        help="Number of iterations inside msign (only for manifold_muon).")
+                        help="Number of iterations inside msign (only for polynomial msigns).")
 
     args = parser.parse_args()
 
@@ -261,14 +173,18 @@ if __name__ == "__main__":
     }
     update = update_rules[args.update]
 
-    # Choose msign variant (only for manifold_muon)
     msign_map = {
         "polarexpress": msign_polarexpress,
-        "ns3": msign_ns3,
         "ns5": msign_ns5,
+        "jordan5": msign_jordan5,
+        "svd_ref": msign_svd_ref,
+        # "you6": msign_you6,
     }
+
     update_kwargs = {}
     if args.update == "manifold_muon":
+        # If your manifold_muon signature supports msign_steps, pass it.
+        # If not, remove msign_steps here and bake steps into the function itself.
         update_kwargs = {
             "msign_fn": msign_map[args.msign],
             "msign_steps": args.msign_steps,
@@ -276,7 +192,7 @@ if __name__ == "__main__":
 
     print(f"Training with: {args.update}")
     if args.update == "manifold_muon":
-        print(f"msign: {args.msign}  msign_steps: {args.msign_steps}")
+        print(f"msign: {args.msign} --- msign_steps: {args.msign_steps}")
     print(f"Epochs: {args.epochs} --- LR: {args.lr}", f"--- WD: {args.wd}" if args.update == "adam" else "")
 
     model, epoch_losses, epoch_times = train(
@@ -284,8 +200,9 @@ if __name__ == "__main__":
         initial_lr=args.lr,
         update=update,
         wd=args.wd,
-        update_kwargs=update_kwargs,
+        update_kwargs=update_kwargs
     )
+
     test_acc, train_acc = eval(model)
     singular_values, norms = weight_stats(model)
 
@@ -311,8 +228,8 @@ if __name__ == "__main__":
         + f"-lr-{args.lr}-wd-{args.wd}-seed-{args.seed}.pkl"
     )
     os.makedirs("results", exist_ok=True)
-    outpath = os.path.join("results", filename)
 
+    outpath = os.path.join("results", filename)
     print(f"Saving results to {outpath}")
     with open(outpath, "wb") as f:
         pickle.dump(results, f)
