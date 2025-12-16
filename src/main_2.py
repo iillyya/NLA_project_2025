@@ -188,7 +188,7 @@ if __name__ == "__main__":
         "ns5": msign_ns5,
         "jordan5": msign_jordan5,
         "svd_ref": msign_svd,
-        # "you6": msign_you6,
+        "you6": msign_you6,
     }
 
     torch.manual_seed(args.seed)
