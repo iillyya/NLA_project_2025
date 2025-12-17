@@ -48,8 +48,8 @@ from msign import msign
 
 
 @torch.no_grad()
-def manifold_muon(W, G, eta=0.1, steps=10, rho=4.0):
-    # Ensure that W and G are both tall matrices
+def manifold_muon(W, G, eta=0.1, steps=10, rho=4.0, msign_fn=msign,
+                  msign_steps: int | None = None):
     should_tranpose = W.shape[0] < W.shape[1]
     if should_tranpose:
         W = W.T
@@ -66,17 +66,17 @@ def manifold_muon(W, G, eta=0.1, steps=10, rho=4.0):
         # Update for X (singular value thresholding)
         B = G + 2 * W @ Lambda_upd - 1 / rho * Omega
         eye = torch.eye(B.shape[1], device=B.device, dtype=B.dtype)
-        P_pos = 0.5 * (eye + msign(B.mT @ B - 1 / rho**2 * eye))
-        X_upd = (B - 1 / rho * msign(B)) @ P_pos
+        P_pos = 0.5 * (eye + msign_fn(B.mT @ B - 1 / rho ** 2 * eye, steps=msign_steps))
+        X_upd = (B - 1 / rho * msign_fn(B, steps=msign_steps)) @ P_pos
         # Update for Omega (dual ascent)
         Omega_upd = Omega + rho * (X_upd - 2 * W @ Lambda_upd - G)
         Lambda, X, Omega = Lambda_upd, X_upd, Omega_upd
     # Calculate A from final ADMM solution
     # (at convergence, G + 2 * W @ Lambda \approx X)
-    A = msign(G + 2 * W @ Lambda)
+    A = msign_fn(G + 2 * W @ Lambda, steps=msign_steps)
     # Descend on the primal problem
     new_W = W - eta * A
     # Retract to the manifold
-    new_W = msign(new_W)
+    new_W = msign_fn(new_W, steps=msign_steps)
     # Restore the shape of the solution and return
     return new_W.T if should_tranpose else new_W
